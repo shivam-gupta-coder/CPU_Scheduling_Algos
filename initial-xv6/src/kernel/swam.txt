@@ -1,0 +1,89 @@
+void scheduler(void)
+{
+  struct proc *p;
+  struct cpu *c = mycpu();
+
+  c->proc = 0;
+  for (;;)
+  {
+    // Avoid deadlock by ensuring that devices can interrupt.
+    intr_on();
+    #ifdef SCHED_LBS
+        int total_tickets = 0;
+        for(p = proc; p < &proc[NPROC]; p++) {
+            if (p->state == RUNNABLE) {
+                total_tickets += p->tickets;
+            }
+        }
+        if (total_tickets > 0) {
+            struct proc *winner = random_lottery(total_tickets);
+            if(winner) {
+              // printf("winner = %d\n",winner->tickets);
+                p = winner;
+                acquire(&p->lock);
+                if(p->state == RUNNABLE) {
+                    p->state = RUNNING;
+                    c->proc = p;
+                    p->time_slice = TIME_SLICE;
+                    swtch(&c->context, &p->context);
+                    c->proc = 0;
+                }
+                release(&p->lock);
+            }
+        }
+      #elif SCHED_MLFQ
+      for(p = proc; p < &proc[NPROC]; p++){
+        acquire(&p->lock);
+        if(p->state == RUNNABLE && ticks - p->queuetime >= AGELIMIT && p->currq > 0){
+          erase(p,p->currq);
+          p->currq--;
+          push(p,p->currq);
+        }
+        if(p->state == RUNNABLE && !p->inside){
+          push(p,p->currq);
+        }
+        release(&p->lock);
+      }
+      struct proc* runP = 0;
+      for(int i = 0; i < NLEVELS && !runP; i++){
+        while(queues[i].tail > -1){
+          p = queues[i].procs[0];
+          erase(p,i);
+          acquire(&p->lock);
+          if(p->state == RUNNABLE){
+            runP = p;
+            break;
+          }
+          release(&p->lock);
+        }
+      }
+      if(runP){
+        runP->state = RUNNING;
+        runP->timeRemaining = 1 << runP->currq;
+        c->proc = runP;
+        swtch(&c->context, &runP->context);
+        c->proc = 0;
+        release(&runP->lock);
+      }
+#else
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE)
+      {
+        // Switch to chosen process.  It is the process's job
+        // to release its lock and then reacquire it
+        // before jumping back to us.
+        p->state = RUNNING;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
+      }
+      release(&p->lock);
+    }
+    #endif
+  }
+}
